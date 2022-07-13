@@ -1,11 +1,9 @@
-#include <Arduino.h>
 
+#include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiMulti.h>
 #include <WiFiClientSecure.h>
-
 #include <ArduinoJson.h>
-
 #include <WebSocketsClient.h>
 #include <SocketIOclient.h>
 #include <HTTPClient.h>
@@ -26,6 +24,26 @@ void drawStatus(){
     IPAddress address = WiFi.localIP();
     String addressString = address.toString();
 
+void drawStatus(){
+
+    IPAddress address = WiFi.localIP();
+    String addressString = address.toString();
+
+
+
+    u8x8.drawString(0, 0, "Connected To:");
+    u8x8.drawString(0, 1, ssid);
+    u8x8.drawString(0, 3, "Current IP: ");
+    u8x8.drawString(0, 4, addressString.c_str());
+    if(token != ""){
+        u8x8.drawString(0, 6, "Token: Acquired");
+    } else{
+        u8x8.drawString(0, 6, "Token: Missing");
+    }
+  
+
+
+}
 
 
     u8x8.drawString(0, 0, "Connected To:");
@@ -215,7 +233,6 @@ unsigned long messageTimestamp = 0;
 void loop() {
 
     socketIO.loop();
-
     uint64_t now = millis();
 
     if(now - messageTimestamp > 2000) {
@@ -243,4 +260,5 @@ void loop() {
         // Print JSON for debugging
         USE_SERIAL.println(output);
     }
+    
 }
