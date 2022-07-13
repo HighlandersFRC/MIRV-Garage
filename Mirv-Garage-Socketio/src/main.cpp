@@ -10,22 +10,40 @@
 #include <U8x8lib.h>
 #include "config.h"
 
+#define USE_SERIAL Serial
+
+
 
 WiFiMulti WiFiMulti;
 SocketIOclient socketIO;
-String token = "";
-bool websocketConnected = false;
-
-
 U8X8_SSD1306_128X64_NONAME_SW_I2C u8x8(/* clock=*/ 15, /* data=*/ 4, /* reset=*/ 16);
-
-#define USE_SERIAL Serial
+String token = "";
 
 void drawStatus(){
 
     IPAddress address = WiFi.localIP();
     String addressString = address.toString();
 
+void drawStatus(){
+
+    IPAddress address = WiFi.localIP();
+    String addressString = address.toString();
+
+
+
+    u8x8.drawString(0, 0, "Connected To:");
+    u8x8.drawString(0, 1, ssid);
+    u8x8.drawString(0, 3, "Current IP: ");
+    u8x8.drawString(0, 4, addressString.c_str());
+    if(token != ""){
+        u8x8.drawString(0, 6, "Token: Acquired");
+    } else{
+        u8x8.drawString(0, 6, "Token: Missing");
+    }
+  
+
+
+}
 
 
     u8x8.drawString(0, 0, "Connected To:");
@@ -107,20 +125,6 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t * payload, size_t length)
     }
 }
 
-
-void setupScreen(){
-    u8x8.begin();
-    u8x8.setFont(u8x8_font_chroma48medium8_r);
-    u8x8.clearDisplay();
-}
-
-void setupSerial(){
-    USE_SERIAL.begin(115200);
-    USE_SERIAL.setDebugOutput(true);
-}
-
-
-
 void connectToNetwork(){
     u8x8.clearDisplay();
     u8x8.drawString(0, 2, "Connecting to:");
@@ -143,7 +147,6 @@ void connectToNetwork(){
     u8x8.clearDisplay();
     drawStatus();
 }
-
 
 void getToken(){
 
@@ -182,70 +185,54 @@ void getToken(){
         Serial.println(httpResponseCode);
     }
     http.end();
+    drawStatus();
 }
 
-void connectToWebsocket(){
-    String headers = "GARAGEID:" + garageID+"Authorization:Bearer"+token;
-    socketIO.setExtraHeaders(headers.c_str());
-    // server address, port and URL
-    socketIO.begin(apiHost, apiPort, "/ws/socket.io/?EIO=4");
-    
-    // event handler
-    socketIO.onEvent(socketIOEvent);
-    socketIO.send(sIOtype_CONNECT, "/");
-    websocketConnected = true;
+void setupScreen(){
+    u8x8.begin();
+    u8x8.setFont(u8x8_font_chroma48medium8_r);
+    u8x8.clearDisplay();
 }
 
+void setupSerial(){
+    USE_SERIAL.begin(115200);
+    USE_SERIAL.setDebugOutput(true);
+}
 
 void setup() {
-
+    
     // Setup Screen for Operation
     setupScreen();
 
     // Setup Serial Bus
     setupSerial();
-    
-    
-    // Add in Boot Delay to ensure system ready to go.
-    USE_SERIAL.println();
-    USE_SERIAL.println();
-    USE_SERIAL.println();
 
     for(uint8_t t = 4; t > 0; t--) {
         USE_SERIAL.printf("[SETUP] BOOT WAIT %d...\n", t);
         USE_SERIAL.flush();
-        u8x8.drawString(0, 4, "  ...Booting...");
         delay(1000);
     }
-    u8x8.clearDisplay();
+
     WiFiMulti.addAP(ssid, wifiPassword);
+
+    connectToNetwork();
+
+    getToken();
+
+    String headers = "GARAGEID:" + garageID+"\nAuthorization:Bearer"+token;
+
+    socketIO.setExtraHeaders(headers.c_str());
+    
+    socketIO.begin(apiHost, apiPort, "/ws/socket.io/?EIO=4");
+    socketIO.onEvent(socketIOEvent);
+    //socketIO.send(sIOtype_CONNECT, "/");
     
 }
 
 unsigned long messageTimestamp = 0;
 void loop() {
 
-    
-    if (WiFiMulti.run() != WL_CONNECTED){
-        connectToNetwork();
-    }
-
-    if(token == ""){
-        getToken();
-    } else {
-        if(!websocketConnected){
-            connectToWebsocket();
-        } else{
-            socketIO.send(sIOtype_CONNECT, "/");
-            socketIO.loop();
-        }
-    }
-
-    
-    drawStatus();
-    
-    
-    /*
+    socketIO.loop();
     uint64_t now = millis();
 
     if(now - messageTimestamp > 2000) {
@@ -273,5 +260,5 @@ void loop() {
         // Print JSON for debugging
         USE_SERIAL.println(output);
     }
-    */
+    
 }
