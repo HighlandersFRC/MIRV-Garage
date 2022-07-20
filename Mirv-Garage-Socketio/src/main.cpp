@@ -19,31 +19,12 @@ SocketIOclient socketIO;
 U8X8_SSD1306_128X64_NONAME_SW_I2C u8x8(/* clock=*/ 15, /* data=*/ 4, /* reset=*/ 16);
 String token = "";
 
-void drawStatus(){
-
-    IPAddress address = WiFi.localIP();
-    String addressString = address.toString();
 
 void drawStatus(){
 
     IPAddress address = WiFi.localIP();
     String addressString = address.toString();
 
-
-
-    u8x8.drawString(0, 0, "Connected To:");
-    u8x8.drawString(0, 1, ssid);
-    u8x8.drawString(0, 3, "Current IP: ");
-    u8x8.drawString(0, 4, addressString.c_str());
-    if(token != ""){
-        u8x8.drawString(0, 6, "Token: Acquired");
-    } else{
-        u8x8.drawString(0, 6, "Token: Missing");
-    }
-  
-
-
-}
 
 
     u8x8.drawString(0, 0, "Connected To:");
