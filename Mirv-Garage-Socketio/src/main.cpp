@@ -47,6 +47,7 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t *payload, size_t length)
     {
     case sIOtype_DISCONNECT:
         USE_SERIAL.printf("[IOc] Disconnected!\n");
+        //USE_SERIAL.printf("%s",payload);
         break;
     case sIOtype_CONNECT:
         USE_SERIAL.printf("[IOc] Connected to url: %s\n", payload);
@@ -126,7 +127,7 @@ void connectToNetwork()
             index = 0;
             u8x8.clearLine(6);
         }
-        u8x8.drawString(index, 6, ssid);
+        u8x8.drawString(index, 6, ".");
 
         index += 1;
     }
@@ -138,49 +139,54 @@ void connectToNetwork()
 
 void getToken()
 {
+    while (token == ""){
+        HTTPClient http;
+        String endpoint = "http://" + apiHost + ":" + apiPort + "/token";
+        String auth = "grant_type=&username=" + username + "&password=" + apiPassword + "&scope=&client_id=&client_secret=";
 
-    HTTPClient http;
-    String endpoint = "http://" + apiHost + ":" + apiPort + "/token";
-
-    http.begin(endpoint.c_str());
-    http.addHeader("Content-Type", "application/x-www-form-urlencoded");
-    String auth = "grant_type=&username=" + username + "&password=" + apiPassword + "&scope=&client_id=&client_secret=";
-
-    Serial.println("Sending Request for Token");
-    int httpResponseCode = http.POST(auth);
-    if (httpResponseCode > 0)
-    {
-        Serial.print("HTTP Response code: ");
-        Serial.println(httpResponseCode);
-        String payload = http.getString();
-
-        DynamicJsonDocument doc(4096);
-        DeserializationError error = deserializeJson(doc, payload);
-
-        if (error)
+        http.begin(endpoint.c_str());
+        http.setTimeout(10000);
+        http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+        http.addHeader("Content-Length", ""+strlen(auth.c_str()));
+        
+        
+        Serial.println("Sending Request for Token");
+        int httpResponseCode = http.POST(auth);
+        if (httpResponseCode > 0 && httpResponseCode < 400)
         {
-            Serial.println("Encountered Error in JSON Parsing");
-            Serial.print(error.f_str());
-        }
+            Serial.print("HTTP Response code: ");
+            Serial.println(httpResponseCode);
+            String payload = http.getString();
 
-        if (doc.containsKey("access_token"))
-        {
-            Serial.println("Found Access Token");
-            const char *access_token = doc["access_token"];
-            token = String(access_token);
+            DynamicJsonDocument doc(4096);
+            DeserializationError error = deserializeJson(doc, payload);
+
+            if (error)
+            {
+                Serial.println("Encountered Error in JSON Parsing");
+                Serial.print(error.f_str());
+            }
+
+            if (doc.containsKey("access_token"))
+            {
+                Serial.println("Found Access Token");
+                const char *access_token = doc["access_token"];
+                token = String(access_token);
+            }
+            else
+            {
+                Serial.println("Failed to find access token");
+            }
         }
         else
         {
-            Serial.println("Failed to find access token");
+            Serial.print("Error code: ");
+            Serial.println(httpResponseCode);
         }
+        http.end();
+        drawStatus();
+        delay(1000);
     }
-    else
-    {
-        Serial.print("Error code: ");
-        Serial.println(httpResponseCode);
-    }
-    http.end();
-    drawStatus();
 }
 
 void setupScreen()
@@ -221,13 +227,13 @@ void setup()
 
     getToken();
 
-    String headers = "GARAGEID:" + garageID + "\nAuthorization:Bearer" + token;
+    //String headers = "ID:" + garageID +"\ndevice_type:garage"+"\nAuthorization:Bearer" + token;
+    String headers = "ID:" + garageID +"\nDEVICE_TYPE:garage"+"\nTOKEN:" + token;
 
     socketIO.setExtraHeaders(headers.c_str());
-
     socketIO.begin(apiHost, apiPort, "/ws/socket.io/?EIO=4");
     socketIO.onEvent(socketIOEvent);
-    // socketIO.send(sIOtype_CONNECT, "/");
+    //socketIO.send(sIOtype_CONNECT, "/");
 }
 
 unsigned long messageTimestamp = 0;
@@ -237,7 +243,7 @@ void loop()
     socketIO.loop();
     uint64_t now = millis();
 
-    if (now - messageTimestamp > 2000)
+    if (now - messageTimestamp > 5000)
     {
         messageTimestamp = now;
 
@@ -247,11 +253,16 @@ void loop()
 
         // add evnet name
         // Hint: socket.on('event_name', ....
-        array.add("event_name");
+        array.add("data");
 
         // add payload (parameters) for the event
         JsonObject param1 = array.createNestedObject();
-        param1["now"] = (uint32_t)now;
+        //param1["now"] = (uint32_t)now;
+        param1["garage_id"] = garageID;
+        param1["linked_rover_id"] = "rover_1";
+        param1["state"] = "retracted_latched";
+        param1["health"] = "healthy";
+
 
         // JSON to String (serializion)
         String output;
