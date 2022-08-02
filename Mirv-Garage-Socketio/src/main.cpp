@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <RoboClaw.h>
 #include <WiFi.h>
 #include <WiFiMulti.h>
 #include <WiFiClientSecure.h>
@@ -6,13 +7,12 @@
 #include <WebSocketsClient.h>
 #include <SocketIOclient.h>
 #include <HTTPClient.h>
-#include <U8x8lib.h>
-#include <RoboClaw.h>
-
+#include <u8x8lib.h>
 #include "config.h"
 
 #define USE_SERIAL Serial
 #define robotClawAddress 0x80
+
 
 RoboClaw roboclaw(&Serial2, 10000);
 
@@ -41,13 +41,17 @@ void drawStatus()
     }
 }
 
+void setMotorPositions(){
+
+}
+
 void socketIOEvent(socketIOmessageType_t type, uint8_t *payload, size_t length)
 {
     switch (type)
     {
     case sIOtype_DISCONNECT:
         USE_SERIAL.printf("[IOc] Disconnected!\n");
-        //USE_SERIAL.printf("%s",payload);
+        USE_SERIAL.printf("%s",payload);
         break;
     case sIOtype_CONNECT:
         USE_SERIAL.printf("[IOc] Connected to url: %s\n", payload);
@@ -137,11 +141,25 @@ void connectToNetwork()
     drawStatus();
 }
 
+void setMotors(double power){
+  
+  double magnitude = power * 128.0;
+  
+  if(power > 0){
+    roboclaw.ForwardM1(robotClawAddress, magnitude);
+    roboclaw.ForwardM2(robotClawAddress, magnitude);
+  } else{
+    roboclaw.BackwardM1(robotClawAddress, magnitude);
+    roboclaw.BackwardM2(robotClawAddress, magnitude);
+  }
+
+}
+
 void getToken()
 {
     while (token == ""){
         HTTPClient http;
-        String endpoint = "http://" + apiHost + ":" + apiPort + "/token";
+        String endpoint = "http:" + apiHost + ":" + apiPort + "/token";
         String auth = "grant_type=&username=" + username + "&password=" + apiPassword + "&scope=&client_id=&client_secret=";
 
         http.begin(endpoint.c_str());
@@ -151,6 +169,7 @@ void getToken()
         
         
         Serial.println("Sending Request for Token");
+        Serial.println(apiHost);
         int httpResponseCode = http.POST(auth);
         if (httpResponseCode > 0 && httpResponseCode < 400)
         {
@@ -202,27 +221,31 @@ void setupSerial()
     USE_SERIAL.setDebugOutput(true);
 }
 
-void setup()
-{
-
+void setup() {
+    // Setup RoboClaw
+    roboclaw.begin(38400);
+  
     // Setup Screen for Operation
     setupScreen();
 
     // Setup Serial Bus
     setupSerial();
 
-    // Setup RoboClaw
-    roboclaw.begin(38400);
+    // Initialize Top and Bottom Soft Limits
+    pinMode(19, INPUT);
+    pinMode(23, INPUT);
 
+    
     for (uint8_t t = 4; t > 0; t--)
     {
         USE_SERIAL.printf("[SETUP] BOOT WAIT %d...\n", t);
         USE_SERIAL.flush();
         delay(1000);
     }
-
+    
+    
     WiFiMulti.addAP(ssid, wifiPassword);
-
+  
     connectToNetwork();
 
     getToken();
@@ -233,18 +256,37 @@ void setup()
     socketIO.setExtraHeaders(headers.c_str());
     socketIO.begin(apiHost, apiPort, "/ws/socket.io/?EIO=4");
     socketIO.onEvent(socketIOEvent);
-    //socketIO.send(sIOtype_CONNECT, "/");
+    socketIO.send(sIOtype_CONNECT, "/");
+    
 }
-
 unsigned long messageTimestamp = 0;
-void loop()
-{
+void loop() {
+  roboclaw.ForwardM1(robotClawAddress, 64);
+  roboclaw.ForwardM2(robotClawAddress, 64);
+  delay(5000);
+  
+  roboclaw.ForwardM1(robotClawAddress, 0);
+  roboclaw.ForwardM2(robotClawAddress, 0);
+  delay(5000);
 
-    socketIO.loop();
+  setMotors(-0.95);
+  delay(5000);
+
+  socketIO.loop();
     uint64_t now = millis();
 
+    
+
+    
+    
     if (now - messageTimestamp > 5000)
     {
+       
+        Serial.println(digitalRead(19));
+        Serial.println(digitalRead(23));
+
+        int32_t enc1= roboclaw.ReadEncM1(0x80);
+        Serial.println("Motor Position"+String(enc1));
         messageTimestamp = now;
 
         // creat JSON message for Socket.IO (event)
@@ -257,7 +299,7 @@ void loop()
 
         // add payload (parameters) for the event
         JsonObject param1 = array.createNestedObject();
-        //param1["now"] = (uint32_t)now;
+        param1["now"] = (uint32_t)now;
         param1["garage_id"] = garageID;
         param1["linked_rover_id"] = "rover_1";
         param1["state"] = "retracted_latched";
@@ -274,9 +316,4 @@ void loop()
         // Print JSON for debugging
         USE_SERIAL.println(output);
     }
-    //roboclaw.ForwardM1(0x80, 64);
-    //delay(2000);
-  
-    //roboclaw.ForwardM1(0x80, 0);
-    //delay(2000);
 }
