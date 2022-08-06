@@ -10,3 +10,4 @@ const int apiPort = ;
 const String garageID = "";
 const String username = "";
 const String apiPassword = "";
+const String roverID = "";

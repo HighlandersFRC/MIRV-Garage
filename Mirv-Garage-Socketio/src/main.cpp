@@ -1,5 +1,5 @@
-
 #include <Arduino.h>
+#include <RoboClaw.h>
 #include <WiFi.h>
 #include <WiFiMulti.h>
 #include <WiFiClientSecure.h>
@@ -7,121 +7,280 @@
 #include <WebSocketsClient.h>
 #include <SocketIOclient.h>
 #include <HTTPClient.h>
-#include <U8x8lib.h>
+#include <u8x8lib.h>
 #include "config.h"
 
 #define USE_SERIAL Serial
 
+// Roboclaw constants
+#define ROBOCLAW_ADDRESS 0x80
+#define POWER_SCALING 126
 
+// Limit Switch Values
+#define BOTTOM_LIMIT_PIN 23
+#define TOP_LIMIT_PIN 19
+#define LIMIT_SWITCH_PRESSED 0
+#define LIMIT_SWITCH_RELEASED 1
+
+// LED Relay Values
+#define LED_PIN 14
+#define LIGHTS_OFF 1
+#define LIGHTS_ON 0
+
+// Values to Set motors to
+#define RETRACT 1
+#define DEPLOY -1
+#define STOP 0
+
+//Garage States
+#define DEPLOYED 0
+#define RETRACTED 1
+
+#define LOCKED 0
+#define UNLOCKED 1
+
+
+
+
+RoboClaw roboclaw(&Serial2, 10000);
 
 WiFiMulti WiFiMulti;
 SocketIOclient socketIO;
-U8X8_SSD1306_128X64_NONAME_SW_I2C u8x8(/* clock=*/ 15, /* data=*/ 4, /* reset=*/ 16);
+U8X8_SSD1306_128X64_NONAME_SW_I2C u8x8(/* clock=*/15, /* data=*/4, /* reset=*/16);
 String token = "";
+String command = "";
+
+double leftMotorPower = 0;
+double rightMotorPower = 0;
+uint8_t lightState = LIGHTS_OFF;
 
 
-void drawStatus(){
+
+
+void sendMotorPowers()
+{
+    if (leftMotorPower >= 0)
+    {
+        roboclaw.ForwardM1(ROBOCLAW_ADDRESS, (uint8_t)(POWER_SCALING * leftMotorPower));
+    }
+    else
+    {
+        roboclaw.BackwardM1(ROBOCLAW_ADDRESS, (uint8_t)(POWER_SCALING * -leftMotorPower));
+    }
+
+    if (rightMotorPower >= 0)
+    {
+        roboclaw.ForwardM2(ROBOCLAW_ADDRESS, (uint8_t)(POWER_SCALING * rightMotorPower));
+    }
+    else
+    {
+        roboclaw.BackwardM2(ROBOCLAW_ADDRESS, (uint8_t)(POWER_SCALING * -rightMotorPower));
+    }
+}
+
+void setMotors(double power)
+{
+
+    if (power > 1)
+    {
+        power = 1;
+    }
+    else if (power < -1)
+    {
+        power = -1;
+    }
+
+    leftMotorPower = power;
+    rightMotorPower = power;
+}
+
+void updateLimitSwitches()
+{
+    //Serial.println(digitalRead(TOP_LIMIT_PIN));
+    int topLimit = digitalRead(TOP_LIMIT_PIN);
+    int bottomLimit = digitalRead(BOTTOM_LIMIT_PIN);
+
+    //Serial.println("Limits");
+    if (topLimit == LIMIT_SWITCH_PRESSED)
+    {
+        
+        //Serial.println(topLimit);
+        if (rightMotorPower > 0)
+        {
+            Serial.println("Stopping Right, Top Limit Switch Hit");
+            rightMotorPower = 0;
+        }
+        if (leftMotorPower > 0)
+        {
+            Serial.println("Stopping Left, Top Limit Switch HIt");
+            leftMotorPower = 0;
+        }
+    }
+
+    if (bottomLimit == LIMIT_SWITCH_PRESSED)
+    {
+        if (rightMotorPower < 0)
+        {
+            Serial.println("Stopping Right, Bottom Limit Switch Hit");
+            rightMotorPower = 0;
+        }
+        if (leftMotorPower < 0)
+        {
+            Serial.println("Stopping Left, Bottom Limit Switch Hit");
+            leftMotorPower = 0;
+        }
+    }
+}
+
+void drawStatus()
+{
 
     IPAddress address = WiFi.localIP();
     String addressString = address.toString();
-
-
 
     u8x8.drawString(0, 0, "Connected To:");
     u8x8.drawString(0, 1, ssid);
     u8x8.drawString(0, 3, "Current IP: ");
     u8x8.drawString(0, 4, addressString.c_str());
-    if(token != ""){
+    if (token != "")
+    {
         u8x8.drawString(0, 6, "Token: Acquired");
-    } else{
+    }
+    else
+    {
         u8x8.drawString(0, 6, "Token: Missing");
     }
-  
-
-
 }
 
-void socketIOEvent(socketIOmessageType_t type, uint8_t * payload, size_t length) {
-    switch(type) {
-        case sIOtype_DISCONNECT:
-            USE_SERIAL.printf("[IOc] Disconnected!\n");
-            break; 
-        case sIOtype_CONNECT:
-            USE_SERIAL.printf("[IOc] Connected to url: %s\n", payload);
+void socketIOEvent(socketIOmessageType_t type, uint8_t *payload, size_t length)
+{
+    switch (type)
+    {
+    case sIOtype_DISCONNECT:
+        USE_SERIAL.printf("[IOc] Disconnected!\n");
+        //USE_SERIAL.printf("%s", payload);
+        break;
+    case sIOtype_CONNECT:
+        Serial.println("Connect");
+        USE_SERIAL.printf("[IOc] Connected to url: %s\n", payload);
 
-            // join default namespace (no auto join in Socket.IO V3)
-            socketIO.send(sIOtype_CONNECT, "/");
-            break;
-        case sIOtype_EVENT:
+        // join default namespace (no auto join in Socket.IO V3)
+        socketIO.send(sIOtype_CONNECT, "/");
+        break;
+    case sIOtype_EVENT:
+    {
+        char *sptr = NULL;
+        int id = strtol((char *)payload, &sptr, 10);
+        USE_SERIAL.printf("[IOc] get event: %s id: %d\n", payload, id);
+        if (id)
         {
-            char * sptr = NULL;
-            int id = strtol((char *)payload, &sptr, 10);
-            USE_SERIAL.printf("[IOc] get event: %s id: %d\n", payload, id);
-            if(id) {
-                payload = (uint8_t *)sptr;
-            }
-            DynamicJsonDocument doc(1024);
-            DeserializationError error = deserializeJson(doc, payload, length);
-            if(error) {
-                USE_SERIAL.print(F("deserializeJson() failed: "));
-                USE_SERIAL.println(error.c_str());
-                return;
-            }
-
-            String eventName = doc[0];
-            USE_SERIAL.printf("[IOc] event name: %s\n", eventName.c_str());
-
-            // Message Includes a ID for a ACK (callback)
-            if(id) {
-                // creat JSON message for Socket.IO (ack)
-                DynamicJsonDocument docOut(1024);
-                JsonArray array = docOut.to<JsonArray>();
-
-                // add payload (parameters) for the ack (callback function)
-                JsonObject param1 = array.createNestedObject();
-                param1["now"] = millis();
-
-                // JSON to String (serializion)
-                String output;
-                output += id;
-                serializeJson(docOut, output);
-
-                // Send event
-                socketIO.send(sIOtype_ACK, output);
-            }
+            payload = (uint8_t *)sptr;
         }
-            break;
-        case sIOtype_ACK:
-            USE_SERIAL.printf("[IOc] get ack: %u\n", length);
-            break;
-        case sIOtype_ERROR:
-            USE_SERIAL.printf("[IOc] get error: %u\n", length);
-            break;
-        case sIOtype_BINARY_EVENT:
-            USE_SERIAL.printf("[IOc] get binary: %u\n", length);
-            break;
-        case sIOtype_BINARY_ACK:
-            USE_SERIAL.printf("[IOc] get binary ack: %u\n", length);
-            break;
+        DynamicJsonDocument doc(1024);
+        DeserializationError error = deserializeJson(doc, payload, length);
+        if (error)
+        {
+            USE_SERIAL.print(F("deserializeJson() failed: "));
+            USE_SERIAL.println(error.c_str());
+            return;
+        }
+
+        String eventName = doc[0];
+        String eventBody = doc[1];
+
+        DynamicJsonDocument innerDoc(1024);
+        error = deserializeJson(innerDoc, eventBody);
+
+        if (error){
+            USE_SERIAL.print(F("deserializeJson() failed: "));
+            USE_SERIAL.println(error.c_str());
+            return;
+        }
+
+        const char* cmd = innerDoc["command"];
+        String command = String(cmd);
+        
+        if(command == "retract"){
+            Serial.println("retract");
+            setMotors(RETRACT);
+            lightState = LIGHTS_OFF;
+        }else if(command == "deploy"){
+            Serial.println("Deploying!");
+            setMotors(DEPLOY);
+            lightState = LIGHTS_ON;
+        }else if(command == "stop"){
+            Serial.println("Stopping!");
+            setMotors(STOP);
+            lightState = LIGHTS_OFF;
+        }else if(command == "lights_on"){
+            lightState = LIGHTS_ON;
+        }else if(command == "lights_off"){
+            lightState = LIGHTS_OFF;
+        }
+        else{
+            Serial.printf("Unknown Command: %s\n", command.c_str());
+        }
+
+        // Message Includes a ID for a ACK (callback)
+        if (id)
+        {
+            // creat JSON message for Socket.IO (ack)
+            DynamicJsonDocument docOut(1024);
+            JsonArray array = docOut.to<JsonArray>();
+
+            // add payload (parameters) for the ack (callback function)
+            JsonObject param1 = array.createNestedObject();
+            param1["now"] = millis();
+
+            // JSON to String (serializion)
+            String output;
+            output += id;
+            serializeJson(docOut, output);
+
+            // Send event
+            socketIO.send(sIOtype_ACK, output);
+        }
     }
+    break;
+    case sIOtype_ACK:
+        USE_SERIAL.printf("[IOc] get ack: %u\n", length);
+        break;
+    case sIOtype_ERROR:
+        USE_SERIAL.printf("[IOc] get error: %u\n", length);
+        break;
+    case sIOtype_BINARY_EVENT:
+        USE_SERIAL.printf("[IOc] get binary: %u\n", length);
+        break;
+    case sIOtype_BINARY_ACK:
+        USE_SERIAL.printf("[IOc] get binary ack: %u\n", length);
+        break;
+    }
+    
 }
 
-void connectToNetwork(){
+void connectToNetwork()
+{
     u8x8.clearDisplay();
     u8x8.drawString(0, 2, "Connecting to:");
     u8x8.drawString(0, 4, ssid);
-    int index = 0;
-    while(WiFiMulti.run() != WL_CONNECTED) {
-        delay(100);
-        
-        
-        if(index > 16){
-            index =0;
+    int retryCount = 0;
+    Serial.println("Connecting to Network");
+    while (WiFiMulti.run() != WL_CONNECTED)
+    {
+        delay(500);
+
+        if (retryCount > 16)
+        {
+            retryCount = 0;
             u8x8.clearLine(6);
         }
-        u8x8.drawString(index, 6, ssid);
+        u8x8.drawString(retryCount, 6, ".");
 
-        index +=1;
+        retryCount += 1;
+        if(retryCount >3){
+            ESP.restart();
+        }
+
     }
     String ip = WiFi.localIP().toString();
     USE_SERIAL.printf("[SETUP] WiFi Connected %s\n", ip.c_str());
@@ -129,66 +288,123 @@ void connectToNetwork(){
     drawStatus();
 }
 
-void getToken(){
 
-    HTTPClient http;
-    String endpoint = "http://" +apiHost + ":" + apiPort+"/token";
-    
-    http.begin(endpoint.c_str());
-    http.addHeader("Content-Type", "application/x-www-form-urlencoded");
-    String auth = "grant_type=&username="+username+"&password="+apiPassword+"&scope=&client_id=&client_secret=";
 
-    Serial.println("Sending Request for Token");
-    int httpResponseCode = http.POST(auth);
-    if (httpResponseCode>0) {
-        Serial.print("HTTP Response code: ");
-        Serial.println(httpResponseCode);
-        String payload = http.getString();
+void getToken()
+{
+    while (token == "")
+    {
+        HTTPClient http;
+        String endpoint = "http://" + apiHost + ":" + apiPort + "/token";
+        String auth = "grant_type=&username=" + username + "&password=" + apiPassword + "&scope=&client_id=&client_secret=";
 
-        DynamicJsonDocument doc(4096);
-        DeserializationError error = deserializeJson(doc, payload);
+        http.begin(endpoint.c_str());
+        http.setTimeout(10000);
+        http.setConnectTimeout(10000);
+        http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+        http.addHeader("Content-Length", "" + strlen(auth.c_str()));
 
-        if(error){
-            Serial.println("Encountered Error in JSON Parsing");
-            Serial.print(error.f_str());
+        Serial.println("Sending Request for Token");
+        Serial.println(endpoint);
+        int httpResponseCode = http.POST(auth);
+        if (httpResponseCode > 0 && httpResponseCode < 400)
+        {
+            String payload = http.getString();
+
+            DynamicJsonDocument doc(4096);
+            DeserializationError error = deserializeJson(doc, payload);
+
+            if (error)
+            {
+                Serial.println("Encountered Error in JSON Parsing");
+                Serial.print(error.f_str());
+            }
+
+            if (doc.containsKey("access_token"))
+            {
+                Serial.println("Found Access Token");
+                const char *access_token = doc["access_token"];
+                token = String(access_token);
+            }
+            else
+            {
+                Serial.println("Failed to find access token");
+            }
         }
-
-        if(doc.containsKey("access_token")){
-            Serial.println("Found Access Token");
-            const char* access_token = doc["access_token"];
-            token = String(access_token);
-        } else {
-            Serial.println("Failed to find access token");
+        else
+        {
+            Serial.print("Error code: ");
+            Serial.println(httpResponseCode);
+            delay(2000);
         }
+        http.end();
+        drawStatus();
+        delay(1000);
     }
-    else {
-        Serial.print("Error code: ");
-        Serial.println(httpResponseCode);
-    }
-    http.end();
-    drawStatus();
 }
 
-void setupScreen(){
+void setupScreen()
+{
     u8x8.begin();
     u8x8.setFont(u8x8_font_chroma48medium8_r);
     u8x8.clearDisplay();
 }
 
-void setupSerial(){
+void setupSerial()
+{
     USE_SERIAL.begin(115200);
     USE_SERIAL.setDebugOutput(true);
 }
 
-void setup() {
-    
+void setupRoboclaw()
+{
+    roboclaw.begin(38400);
+    roboclaw.clear();
+    setMotors(STOP);
+    sendMotorPowers();
+}
+
+void setupLimitSwitches()
+{
+    pinMode(BOTTOM_LIMIT_PIN, INPUT);
+    pinMode(TOP_LIMIT_PIN, INPUT);
+}
+
+void setupLights(){
+    pinMode(LED_PIN, OUTPUT);
+    lightState = LIGHTS_OFF;
+    digitalWrite(LED_PIN, lightState);
+}
+
+
+void setup()
+{
+
+
+    // Setup RoboClaw
+    setupRoboclaw();
+
     // Setup Screen for Operation
     setupScreen();
 
     // Setup Serial Bus
     setupSerial();
 
-    for(uint8_t t = 4; t > 0; t--) {
+    // Setup Top and Bottom Soft Limits
+    setupLimitSwitches();
+
+    // Setup Lights
+    setupLights();
+
+    // Setup other
+
+
+    
+
+    
+
+    for (uint8_t t = 4; t > 0; t--)
+    {
         USE_SERIAL.printf("[SETUP] BOOT WAIT %d...\n", t);
         USE_SERIAL.flush();
         delay(1000);
@@ -199,24 +415,35 @@ void setup() {
     connectToNetwork();
 
     getToken();
-
-    String headers = "GARAGEID:" + garageID+"\nAuthorization:Bearer"+token;
+    String headers = "ID:" + garageID + "\nDEVICE_TYPE:garage" + "\nTOKEN:" + token;
 
     socketIO.setExtraHeaders(headers.c_str());
-    
     socketIO.begin(apiHost, apiPort, "/ws/socket.io/?EIO=4");
     socketIO.onEvent(socketIOEvent);
-    //socketIO.send(sIOtype_CONNECT, "/");
+    socketIO.send(sIOtype_CONNECT, "/");
+
+    setMotors(DEPLOY);
+    sendMotorPowers();
     
 }
-
 unsigned long messageTimestamp = 0;
-void loop() {
+
+
+void loop()
+{
 
     socketIO.loop();
+
     uint64_t now = millis();
 
-    if(now - messageTimestamp > 2000) {
+
+
+    if (now - messageTimestamp > 5000)
+    {
+        
+
+        // int32_t enc1= roboclaw.ReadEncM1(0x80);
+        // Serial.println("Motor Position"+String(enc1));
         messageTimestamp = now;
 
         // creat JSON message for Socket.IO (event)
@@ -225,11 +452,24 @@ void loop() {
 
         // add evnet name
         // Hint: socket.on('event_name', ....
-        array.add("event_name");
+        array.add("data");
 
         // add payload (parameters) for the event
         JsonObject param1 = array.createNestedObject();
-        param1["now"] = (uint32_t) now;
+        param1["now"] = (uint32_t)now;
+        param1["garage_id"] = garageID;
+        param1["linked_rover_id"] = "rover_1";
+        param1["state"] = "retracted_latched";
+        param1["health"] = "healthy";
+        param1["health_details"] = "healthy";
+
+        if(lightState == LIGHTS_ON){
+            param1["lights_on"] = true;
+        }else{
+            param1["lights_on"] = false;
+        }
+        
+        //param1["light_state"] = lightState;
 
         // JSON to String (serializion)
         String output;
@@ -239,7 +479,10 @@ void loop() {
         socketIO.sendEVENT(output);
 
         // Print JSON for debugging
-        USE_SERIAL.println(output);
+        //USE_SERIAL.println(output);
     }
-    
+
+    digitalWrite(LED_PIN, lightState);
+    updateLimitSwitches();
+    sendMotorPowers();
 }
