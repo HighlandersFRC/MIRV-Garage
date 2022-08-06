@@ -8,6 +8,7 @@
 #include <SocketIOclient.h>
 #include <HTTPClient.h>
 #include <u8x8lib.h>
+#include <ESP32_ISR_Servo.h>
 #include "config.h"
 
 #define USE_SERIAL Serial
@@ -40,7 +41,9 @@
 #define UNLOCKED 1
 
 
-
+#define MIN_MICROS      800  //544
+#define MAX_MICROS      2450
+#define USE_ESP32_TIMER_NO          3
 
 RoboClaw roboclaw(&Serial2, 10000);
 
@@ -53,6 +56,11 @@ String command = "";
 double leftMotorPower = 0;
 double rightMotorPower = 0;
 uint8_t lightState = LIGHTS_OFF;
+
+
+
+int  servoIndex1 = -1;
+int  servoIndex2 = -1;
 
 
 
@@ -376,6 +384,12 @@ void setupLights(){
     digitalWrite(LED_PIN, lightState);
 }
 
+void setupServos(){
+    ESP32_ISR_Servos.useTimer(USE_ESP32_TIMER_NO);
+    ESP32_ISR_Servos.setupServo(25, MIN_MICROS, MAX_MICROS);
+    ESP32_ISR_Servos.setupServo(33, MIN_MICROS, MAX_MICROS);
+}
+
 
 void setup()
 {
@@ -397,10 +411,11 @@ void setup()
     setupLights();
 
     // Setup other
-
+    setupServos();
 
     
-
+    ESP32_ISR_Servos.setPosition(servoIndex1, 0);
+    ESP32_ISR_Servos.setPosition(servoIndex2, 0);
     
 
     for (uint8_t t = 4; t > 0; t--)
