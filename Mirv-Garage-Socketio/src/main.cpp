@@ -154,7 +154,6 @@ void drawStatus()
 
 void socketIOEvent(socketIOmessageType_t type, uint8_t *payload, size_t length)
 {
-    Serial.println("Event");
     switch (type)
     {
     case sIOtype_DISCONNECT:
@@ -170,7 +169,6 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t *payload, size_t length)
         break;
     case sIOtype_EVENT:
     {
-        Serial.println("Event Event");
         char *sptr = NULL;
         int id = strtol((char *)payload, &sptr, 10);
         USE_SERIAL.printf("[IOc] get event: %s id: %d\n", payload, id);
@@ -214,7 +212,12 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t *payload, size_t length)
             Serial.println("Stopping!");
             setMotors(STOP);
             lightState = LIGHTS_OFF;
-        }else{
+        }else if(command == "lights_on"){
+            lightState = LIGHTS_ON;
+        }else if(command == "lights_off"){
+            lightState = LIGHTS_OFF;
+        }
+        else{
             Serial.printf("Unknown Command: %s\n", command.c_str());
         }
 
@@ -260,19 +263,23 @@ void connectToNetwork()
     u8x8.clearDisplay();
     u8x8.drawString(0, 2, "Connecting to:");
     u8x8.drawString(0, 4, ssid);
-    int index = 0;
+    int retryCount = 0;
+    Serial.println("Connecting to Network");
     while (WiFiMulti.run() != WL_CONNECTED)
     {
-        delay(100);
+        delay(500);
 
-        if (index > 16)
+        if (retryCount > 16)
         {
-            index = 0;
+            retryCount = 0;
             u8x8.clearLine(6);
         }
-        u8x8.drawString(index, 6, ".");
+        u8x8.drawString(retryCount, 6, ".");
 
-        index += 1;
+        retryCount += 1;
+        if(retryCount >3){
+            ESP.restart();
+        }
 
     }
     String ip = WiFi.localIP().toString();
@@ -293,6 +300,7 @@ void getToken()
 
         http.begin(endpoint.c_str());
         http.setTimeout(10000);
+        http.setConnectTimeout(10000);
         http.addHeader("Content-Type", "application/x-www-form-urlencoded");
         http.addHeader("Content-Length", "" + strlen(auth.c_str()));
 
@@ -368,6 +376,7 @@ void setupLights(){
     digitalWrite(LED_PIN, lightState);
 }
 
+
 void setup()
 {
 
@@ -386,6 +395,9 @@ void setup()
 
     // Setup Lights
     setupLights();
+
+    // Setup other
+
 
     
 
@@ -449,6 +461,15 @@ void loop()
         param1["linked_rover_id"] = "rover_1";
         param1["state"] = "retracted_latched";
         param1["health"] = "healthy";
+        param1["health_details"] = "healthy";
+
+        if(lightState == LIGHTS_ON){
+            param1["lights_on"] = true;
+        }else{
+            param1["lights_on"] = false;
+        }
+        
+        //param1["light_state"] = lightState;
 
         // JSON to String (serializion)
         String output;
