@@ -12,6 +12,8 @@
 #include "config.h"
 
 #define USE_SERIAL Serial
+#define TIMER_INTERRUPT_DEBUG 1
+//#define ISR_SERVO_DEBUG             1
 
 // Roboclaw constants
 #define ROBOCLAW_ADDRESS 0x80
@@ -33,37 +35,89 @@
 #define DEPLOY -1
 #define STOP 0
 
-//Garage States
+// Garage States
 #define DEPLOYED 0
 #define RETRACTED 1
+#define MOVING 2
+#define ELEVATOR_UNKNOWN 3
 
+// Lock States
 #define LOCKED 0
 #define UNLOCKED 1
+#define LOCK_UNKNOWN 2
 
+// Servo Parameters
+#define MIN_MICROS 500
+#define MAX_MICROS 2500
+#define USE_ESP32_TIMER_NO 3
+#define LEFT_SERVO_PIN 33
+#define RIGHT_SERVO_PIN 25
 
-#define MIN_MICROS      800  //544
-#define MAX_MICROS      2450
-#define USE_ESP32_TIMER_NO          3
-
+// Creat Motor Controller
 RoboClaw roboclaw(&Serial2, 10000);
 
 WiFiMulti WiFiMulti;
 SocketIOclient socketIO;
+
+// Setup Screen
 U8X8_SSD1306_128X64_NONAME_SW_I2C u8x8(/* clock=*/15, /* data=*/4, /* reset=*/16);
+
 String token = "";
 String command = "";
 
+// System State Variables
+uint8_t lightState = LIGHTS_OFF;
+uint8_t lockState = LOCK_UNKNOWN;
+uint8_t elevatorState = MOVING; // Set to moving to account for unknown state
+
+// System Desired Variables
+uint8_t lockDesired = LOCK_UNKNOWN;
+uint8_t elevatorDesired = ELEVATOR_UNKNOWN;
+
+uint64_t lockUpdateTime = 0;
+uint8_t lockSetState = LOCK_UNKNOWN;
 double leftMotorPower = 0;
 double rightMotorPower = 0;
-uint8_t lightState = LIGHTS_OFF;
+int rightServoIndex = -1;
+int leftServoIndex = -1;
 
-
-
-int  servoIndex1 = -1;
-int  servoIndex2 = -1;
-
-
-
+String getStateString()
+{
+    if (elevatorState == DEPLOYED)
+    {
+        return "deployed";
+    }
+    else if (elevatorState == RETRACTED)
+    {
+        if (lockState == UNLOCKED)
+        {
+            return "retracted_unlatched";
+        }
+        else if (lockState == LOCKED)
+        {
+            return "retracted_latched";
+        }
+        else
+        {
+            return "unavailable";
+        }
+    }
+    else
+    {
+        if (elevatorDesired == DEPLOYED)
+        {
+            return "in_motion_deploy";
+        }
+        else if (elevatorDesired == RETRACT)
+        {
+            return "in_motion_retract";
+        }
+        else
+        {
+            return "unavailable";
+        }
+    }
+}
 
 void sendMotorPowers()
 {
@@ -102,17 +156,33 @@ void setMotors(double power)
     rightMotorPower = power;
 }
 
+void setLock(int state)
+{
+    // This needs to be tuned.
+    lockSetState = state;
+    if (state == LOCKED)
+    {
+        ESP32_ISR_Servos.setPosition(rightServoIndex, 45);
+        ESP32_ISR_Servos.setPosition(leftServoIndex, 10);
+    }
+    else if (state == UNLOCKED)
+    {
+        ESP32_ISR_Servos.setPosition(rightServoIndex, 45);
+        ESP32_ISR_Servos.setPosition(leftServoIndex, 80);
+    }
+    else
+    {
+    }
+}
+
 void updateLimitSwitches()
 {
-    //Serial.println(digitalRead(TOP_LIMIT_PIN));
     int topLimit = digitalRead(TOP_LIMIT_PIN);
     int bottomLimit = digitalRead(BOTTOM_LIMIT_PIN);
 
-    //Serial.println("Limits");
     if (topLimit == LIMIT_SWITCH_PRESSED)
     {
-        
-        //Serial.println(topLimit);
+        elevatorState = RETRACTED;
         if (rightMotorPower > 0)
         {
             Serial.println("Stopping Right, Top Limit Switch Hit");
@@ -120,13 +190,14 @@ void updateLimitSwitches()
         }
         if (leftMotorPower > 0)
         {
-            Serial.println("Stopping Left, Top Limit Switch HIt");
+            Serial.println("Stopping Left, Top Limit Switch Hit");
             leftMotorPower = 0;
         }
     }
-
-    if (bottomLimit == LIMIT_SWITCH_PRESSED)
+    else if (bottomLimit == LIMIT_SWITCH_PRESSED)
     {
+        elevatorState = DEPLOYED;
+        lockState = UNLOCKED;
         if (rightMotorPower < 0)
         {
             Serial.println("Stopping Right, Bottom Limit Switch Hit");
@@ -138,6 +209,84 @@ void updateLimitSwitches()
             leftMotorPower = 0;
         }
     }
+    else
+    {
+        elevatorState = MOVING;
+    }
+}
+
+void updateLock()
+{
+    uint64_t now = millis();
+
+    if (lockState != lockDesired && lockDesired != LOCK_UNKNOWN)
+    {
+        if (elevatorState == RETRACTED)
+        {
+            setLock(lockDesired);
+            lockUpdateTime = millis();
+        }
+    }
+    else if (lockState == LOCK_UNKNOWN)
+    {
+        setLock(UNLOCKED);
+    }
+
+    if (now - lockUpdateTime > 1000 && lockSetState != LOCK_UNKNOWN)
+    {
+        lockState = lockSetState;
+    }
+}
+
+void updateElevator()
+{
+    if (elevatorDesired != elevatorState && elevatorDesired != ELEVATOR_UNKNOWN)
+    {
+        if (lockState == UNLOCKED)
+        {
+            if (elevatorDesired == DEPLOYED)
+            {
+                //Serial.println("Trying to Deploy");
+                setMotors(DEPLOY);
+            }
+            else if (elevatorDesired == RETRACT)
+            {
+                //Serial.println("Trying to Retract");
+                setMotors(RETRACT);
+            }
+            else
+            {
+                //Serial.println("Stopping Unknown Objective");
+                setMotors(STOP);
+            }
+        }
+        else
+        {
+            //Serial.printf("Stopping Garage is Locked %i\n", lockState);
+            setMotors(STOP);
+        }
+    }
+    else
+    {
+        Serial.println("Stopping Elevator is in Desired State");
+        setMotors(STOP);
+    }
+
+    sendMotorPowers();
+}
+
+void deployElevator()
+{
+    lockDesired = UNLOCKED;
+    elevatorDesired = DEPLOYED;
+    lightState = LIGHTS_ON;
+}
+
+void retractElevator()
+{
+    elevatorDesired = RETRACTED;
+    lockDesired = LOCKED;
+    lightState = LIGHTS_OFF;
 }
 
 void drawStatus()
@@ -166,7 +315,7 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t *payload, size_t length)
     {
     case sIOtype_DISCONNECT:
         USE_SERIAL.printf("[IOc] Disconnected!\n");
-        //USE_SERIAL.printf("%s", payload);
+        // USE_SERIAL.printf("%s", payload);
         break;
     case sIOtype_CONNECT:
         Serial.println("Connect");
@@ -199,33 +348,42 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t *payload, size_t length)
         DynamicJsonDocument innerDoc(1024);
         error = deserializeJson(innerDoc, eventBody);
 
-        if (error){
+        if (error)
+        {
             USE_SERIAL.print(F("deserializeJson() failed: "));
             USE_SERIAL.println(error.c_str());
             return;
         }
 
-        const char* cmd = innerDoc["command"];
+        const char *cmd = innerDoc["command"];
         String command = String(cmd);
-        
-        if(command == "retract"){
+
+        if (command == "retract")
+        {
             Serial.println("retract");
-            setMotors(RETRACT);
-            lightState = LIGHTS_OFF;
-        }else if(command == "deploy"){
+            retractElevator();
+        }
+        else if (command == "deploy")
+        {
             Serial.println("Deploying!");
-            setMotors(DEPLOY);
-            lightState = LIGHTS_ON;
-        }else if(command == "stop"){
+            deployElevator();
+        }
+        else if (command == "stop")
+        {
             Serial.println("Stopping!");
             setMotors(STOP);
             lightState = LIGHTS_OFF;
-        }else if(command == "lights_on"){
+        }
+        else if (command == "lights_on")
+        {
             lightState = LIGHTS_ON;
-        }else if(command == "lights_off"){
+        }
+        else if (command == "lights_off")
+        {
             lightState = LIGHTS_OFF;
         }
-        else{
+        else
+        {
             Serial.printf("Unknown Command: %s\n", command.c_str());
         }
 
@@ -263,7 +421,6 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t *payload, size_t length)
         USE_SERIAL.printf("[IOc] get binary ack: %u\n", length);
         break;
     }
-    
 }
 
 void connectToNetwork()
@@ -285,18 +442,16 @@ void connectToNetwork()
         u8x8.drawString(retryCount, 6, ".");
 
         retryCount += 1;
-        if(retryCount >3){
+        if (retryCount > 3)
+        {
             ESP.restart();
         }
-
     }
     String ip = WiFi.localIP().toString();
     USE_SERIAL.printf("[SETUP] WiFi Connected %s\n", ip.c_str());
     u8x8.clearDisplay();
     drawStatus();
 }
-
-
 
 void getToken()
 {
@@ -378,22 +533,22 @@ void setupLimitSwitches()
     pinMode(TOP_LIMIT_PIN, INPUT);
 }
 
-void setupLights(){
+void setupLights()
+{
     pinMode(LED_PIN, OUTPUT);
     lightState = LIGHTS_OFF;
     digitalWrite(LED_PIN, lightState);
 }
 
-void setupServos(){
+void setupServos()
+{
     ESP32_ISR_Servos.useTimer(USE_ESP32_TIMER_NO);
-    ESP32_ISR_Servos.setupServo(25, MIN_MICROS, MAX_MICROS);
-    ESP32_ISR_Servos.setupServo(33, MIN_MICROS, MAX_MICROS);
+    rightServoIndex = ESP32_ISR_Servos.setupServo(RIGHT_SERVO_PIN, MIN_MICROS, MAX_MICROS);
+    leftServoIndex = ESP32_ISR_Servos.setupServo(LEFT_SERVO_PIN, MIN_MICROS, MAX_MICROS);
 }
-
 
 void setup()
 {
-
 
     // Setup RoboClaw
     setupRoboclaw();
@@ -410,13 +565,8 @@ void setup()
     // Setup Lights
     setupLights();
 
-    // Setup other
+    // Setup Servos
     setupServos();
-
-    
-    ESP32_ISR_Servos.setPosition(servoIndex1, 0);
-    ESP32_ISR_Servos.setPosition(servoIndex2, 0);
-    
 
     for (uint8_t t = 4; t > 0; t--)
     {
@@ -424,6 +574,8 @@ void setup()
         USE_SERIAL.flush();
         delay(1000);
     }
+
+    Serial.printf("%i, %i\n", rightServoIndex, leftServoIndex);
 
     WiFiMulti.addAP(ssid, wifiPassword);
 
@@ -436,13 +588,8 @@ void setup()
     socketIO.begin(apiHost, apiPort, "/ws/socket.io/?EIO=4");
     socketIO.onEvent(socketIOEvent);
     socketIO.send(sIOtype_CONNECT, "/");
-
-    setMotors(DEPLOY);
-    sendMotorPowers();
-    
 }
 unsigned long messageTimestamp = 0;
-
 
 void loop()
 {
@@ -451,11 +598,8 @@ void loop()
 
     uint64_t now = millis();
 
-
-
     if (now - messageTimestamp > 5000)
     {
-        
 
         // int32_t enc1= roboclaw.ReadEncM1(0x80);
         // Serial.println("Motor Position"+String(enc1));
@@ -474,17 +618,22 @@ void loop()
         param1["now"] = (uint32_t)now;
         param1["garage_id"] = garageID;
         param1["linked_rover_id"] = "rover_1";
-        param1["state"] = "retracted_latched";
+        param1["state"] = getStateString();
         param1["health"] = "healthy";
         param1["health_details"] = "healthy";
 
-        if(lightState == LIGHTS_ON){
+        if (lightState == LIGHTS_ON)
+        {
             param1["lights_on"] = true;
-        }else{
+        }
+        else
+        {
             param1["lights_on"] = false;
         }
-        
-        //param1["light_state"] = lightState;
+        Serial.println(getStateString());
+        Serial.println(lockState);
+
+        // param1["light_state"] = lightState;
 
         // JSON to String (serializion)
         String output;
@@ -494,10 +643,13 @@ void loop()
         socketIO.sendEVENT(output);
 
         // Print JSON for debugging
-        //USE_SERIAL.println(output);
+        USE_SERIAL.println(output);
     }
 
     digitalWrite(LED_PIN, lightState);
+
+    // Update Limit Switches to check platform state
     updateLimitSwitches();
-    sendMotorPowers();
+    updateLock();
+    updateElevator();
 }
