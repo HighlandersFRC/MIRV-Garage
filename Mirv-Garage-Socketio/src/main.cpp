@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <RoboClaw.h>
 #include <WiFi.h>
-#include <WiFiMulti.h>
+//#include <WiFiMulti.h>
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 #include <WebSocketsClient.h>
@@ -56,7 +56,7 @@
 // Creat Motor Controller
 RoboClaw roboclaw(&Serial2, 10000);
 
-WiFiMulti WiFiMulti;
+//WiFiMulti WiFiMulti;
 SocketIOclient socketIO;
 
 // Setup Screen
@@ -162,13 +162,13 @@ void setLock(int state)
     lockSetState = state;
     if (state == LOCKED)
     {
-        ESP32_ISR_Servos.setPosition(rightServoIndex, 45);
-        ESP32_ISR_Servos.setPosition(leftServoIndex, 10);
+        ESP32_ISR_Servos.setPosition(rightServoIndex, 172);//172
+        ESP32_ISR_Servos.setPosition(leftServoIndex, 28);//28
     }
     else if (state == UNLOCKED)
     {
-        ESP32_ISR_Servos.setPosition(rightServoIndex, 45);
-        ESP32_ISR_Servos.setPosition(leftServoIndex, 80);
+        ESP32_ISR_Servos.setPosition(rightServoIndex, 140);//140
+        ESP32_ISR_Servos.setPosition(leftServoIndex,75);//75
     }
     else
     {
@@ -430,8 +430,10 @@ void connectToNetwork()
     u8x8.drawString(0, 4, ssid);
     int retryCount = 0;
     Serial.println("Connecting to Network");
-    while (WiFiMulti.run() != WL_CONNECTED)
+    while (WiFi.status() != WL_CONNECTED)
     {
+        Serial.println(".");
+        
         delay(500);
 
         if (retryCount > 16)
@@ -574,10 +576,11 @@ void setup()
         USE_SERIAL.flush();
         delay(1000);
     }
-
+    
     Serial.printf("%i, %i\n", rightServoIndex, leftServoIndex);
 
-    WiFiMulti.addAP(ssid, wifiPassword);
+    //WiFiMulti.addAP(ssid, wifiPassword);
+    WiFi.begin(ssid, wifiPassword);
 
     connectToNetwork();
 
@@ -588,6 +591,8 @@ void setup()
     socketIO.begin(apiHost, apiPort, "/ws/socket.io/?EIO=4");
     socketIO.onEvent(socketIOEvent);
     socketIO.send(sIOtype_CONNECT, "/");
+    
+   //deployElevator();
 }
 unsigned long messageTimestamp = 0;
 
