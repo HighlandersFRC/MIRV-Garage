@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <RoboClaw.h>
 #include <WiFi.h>
-//#include <WiFiMulti.h>
+#include <WiFiMulti.h>
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 #include <WebSocketsClient.h>
@@ -12,7 +12,7 @@
 #include "config.h"
 
 #define USE_SERIAL Serial
-#define TIMER_INTERRUPT_DEBUG 1
+#define TIMER_INTERRUPT_DEBUG 0
 //#define ISR_SERVO_DEBUG             1
 
 // Roboclaw constants
@@ -49,14 +49,14 @@
 // Servo Parameters
 #define MIN_MICROS 500
 #define MAX_MICROS 2500
-#define USE_ESP32_TIMER_NO 3
+#define USE_ESP32_TIMER_NO 1
 #define LEFT_SERVO_PIN 33
 #define RIGHT_SERVO_PIN 25
 
 // Creat Motor Controller
 RoboClaw roboclaw(&Serial2, 10000);
 
-//WiFiMulti WiFiMulti;
+WiFiMulti WiFiMulti;
 SocketIOclient socketIO;
 
 // Setup Screen
@@ -430,7 +430,7 @@ void connectToNetwork()
     u8x8.drawString(0, 4, ssid);
     int retryCount = 0;
     Serial.println("Connecting to Network");
-    while (WiFi.status() != WL_CONNECTED)
+    while (WiFiMulti.run() != WL_CONNECTED)
     {
         Serial.println(".");
         
@@ -579,9 +579,7 @@ void setup()
     
     Serial.printf("%i, %i\n", rightServoIndex, leftServoIndex);
 
-    //WiFiMulti.addAP(ssid, wifiPassword);
-    WiFi.begin(ssid, wifiPassword);
-
+    WiFiMulti.addAP(ssid, wifiPassword);
     connectToNetwork();
 
     getToken();
