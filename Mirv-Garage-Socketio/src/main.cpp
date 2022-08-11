@@ -50,8 +50,8 @@
 #define MIN_MICROS 500
 #define MAX_MICROS 2500
 #define USE_ESP32_TIMER_NO 1
-#define LEFT_SERVO_PIN 33
-#define RIGHT_SERVO_PIN 25
+#define LEFT_SERVO_PIN 25
+#define RIGHT_SERVO_PIN 33
 
 // Creat Motor Controller
 RoboClaw roboclaw(&Serial2, 10000);
@@ -162,13 +162,13 @@ void setLock(int state)
     lockSetState = state;
     if (state == LOCKED)
     {
-        ESP32_ISR_Servos.setPosition(rightServoIndex, 172);//172
-        ESP32_ISR_Servos.setPosition(leftServoIndex, 28);//28
+        ESP32_ISR_Servos.setPosition(rightServoIndex, 175);//172
+        ESP32_ISR_Servos.setPosition(leftServoIndex, 25);//28
     }
     else if (state == UNLOCKED)
     {
         ESP32_ISR_Servos.setPosition(rightServoIndex, 140);//140
-        ESP32_ISR_Servos.setPosition(leftServoIndex,75);//75
+        ESP32_ISR_Servos.setPosition(leftServoIndex,72);//75
     }
     else
     {
@@ -221,7 +221,7 @@ void updateLock()
 
     if (lockState != lockDesired && lockDesired != LOCK_UNKNOWN)
     {
-        if (elevatorState == RETRACTED)
+        if (elevatorState == RETRACTED or lockDesired == UNLOCKED)
         {
             setLock(lockDesired);
             lockUpdateTime = millis();
@@ -232,7 +232,7 @@ void updateLock()
         setLock(UNLOCKED);
     }
 
-    if (now - lockUpdateTime > 1000 && lockSetState != LOCK_UNKNOWN)
+    if (now - lockUpdateTime > 2000 && lockSetState != LOCK_UNKNOWN)
     {
         lockState = lockSetState;
     }
@@ -547,6 +547,7 @@ void setupServos()
     ESP32_ISR_Servos.useTimer(USE_ESP32_TIMER_NO);
     rightServoIndex = ESP32_ISR_Servos.setupServo(RIGHT_SERVO_PIN, MIN_MICROS, MAX_MICROS);
     leftServoIndex = ESP32_ISR_Servos.setupServo(LEFT_SERVO_PIN, MIN_MICROS, MAX_MICROS);
+    setLock(UNLOCKED);
 }
 
 void setup()
@@ -576,7 +577,20 @@ void setup()
         USE_SERIAL.flush();
         delay(1000);
     }
-    
+
+    /*
+    bool forward = false;
+    for(;;){
+        forward = !forward;
+        if(forward){
+            setLock(UNLOCKED);
+        }else{
+            setLock(LOCKED);
+        }
+        delay(5000);
+    }
+    */
+
     Serial.printf("%i, %i\n", rightServoIndex, leftServoIndex);
 
     WiFiMulti.addAP(ssid, wifiPassword);
