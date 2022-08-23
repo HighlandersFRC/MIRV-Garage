@@ -81,6 +81,11 @@ double rightMotorPower = 0;
 int rightServoIndex = -1;
 int leftServoIndex = -1;
 
+
+// Additional Statistics
+float temperature = 0;
+float voltage = 0;
+
 String getStateString()
 {
     if (elevatorState == DEPLOYED)
@@ -162,7 +167,7 @@ void setLock(int state)
     lockSetState = state;
     if (state == LOCKED)
     {
-        ESP32_ISR_Servos.setPosition(rightServoIndex, 175);//172
+        ESP32_ISR_Servos.setPosition(rightServoIndex, 180);//172
         ESP32_ISR_Servos.setPosition(leftServoIndex, 25);//28
     }
     else if (state == UNLOCKED)
@@ -213,6 +218,23 @@ void updateLimitSwitches()
     {
         elevatorState = MOVING;
     }
+}
+
+void updateRoboClaw(){
+    uint16_t temp = 0;
+    bool error = roboclaw.ReadTemp(ROBOCLAW_ADDRESS, temp);
+    temperature = (float)temp/10;
+
+    //Serial.printf("Temp: %f", temp_f);
+    
+    int read_voltage = 0;
+    read_voltage = roboclaw.ReadMainBatteryVoltage(0x80);
+    voltage = (float)voltage/10.0;
+    
+
+    int16_t current1 = 0;
+    int16_t current2 = 0;
+    bool currentError = roboclaw.ReadCurrents(0x80, current1, current2);
 }
 
 void updateLock()
@@ -268,7 +290,7 @@ void updateElevator()
     }
     else
     {
-        Serial.println("Stopping Elevator is in Desired State");
+        //Serial.println("Stopping Elevator is in Desired State");
         setMotors(STOP);
     }
 
@@ -376,10 +398,12 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t *payload, size_t length)
         }
         else if (command == "lights_on")
         {
+            Serial.println("Lights On!");
             lightState = LIGHTS_ON;
         }
         else if (command == "lights_off")
         {
+            Serial.println("Lights Off!");
             lightState = LIGHTS_OFF;
         }
         else
@@ -590,9 +614,7 @@ void setup()
         delay(5000);
     }
     */
-
-    Serial.printf("%i, %i\n", rightServoIndex, leftServoIndex);
-
+   
     WiFiMulti.addAP(ssid, wifiPassword);
     connectToNetwork();
 
@@ -604,7 +626,7 @@ void setup()
     socketIO.onEvent(socketIOEvent);
     socketIO.send(sIOtype_CONNECT, "/");
     
-   //deployElevator();
+    
 }
 unsigned long messageTimestamp = 0;
 
@@ -618,8 +640,8 @@ void loop()
     if (now - messageTimestamp > 5000)
     {
 
-        // int32_t enc1= roboclaw.ReadEncM1(0x80);
-        // Serial.println("Motor Position"+String(enc1));
+        int32_t enc1= roboclaw.ReadEncM1(0x80);
+        Serial.println("Motor Position"+String(enc1));
         messageTimestamp = now;
 
         // creat JSON message for Socket.IO (event)
@@ -638,6 +660,8 @@ void loop()
         param1["state"] = getStateString();
         param1["health"] = "healthy";
         param1["health_details"] = "healthy";
+        param1["temperature"] = temperature;
+        param1["voltage"] = voltage;
 
         if (lightState == LIGHTS_ON)
         {
@@ -667,6 +691,8 @@ void loop()
 
     // Update Limit Switches to check platform state
     updateLimitSwitches();
+    updateRoboClaw();
     updateLock();
     updateElevator();
+    
 }

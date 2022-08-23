@@ -36,7 +36,7 @@ RoboClaw::~RoboClaw()
 void RoboClaw::begin(long speed)
 {
 	if(hserial){
-		hserial->begin(speed);
+		hserial->begin(speed,SERIAL_8N1,0,17);
 	}
 #ifdef __AVR__
 	else{
