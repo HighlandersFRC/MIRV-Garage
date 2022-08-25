@@ -27,8 +27,8 @@
 
 // LED Relay Values
 #define LED_PIN 14
-#define LIGHTS_OFF 1
-#define LIGHTS_ON 0
+#define LIGHTS_OFF 0
+#define LIGHTS_ON 1
 
 // Values to Set motors to
 #define RETRACT 1
@@ -53,6 +53,11 @@
 #define LEFT_SERVO_PIN 25
 #define RIGHT_SERVO_PIN 33
 
+// Garage Sensor Parameters
+#define ROVER_SENSOR_PIN 34
+#define UNBROKEN 0
+#define BROKEN 1
+
 // Creat Motor Controller
 RoboClaw roboclaw(&Serial2, 10000);
 
@@ -69,6 +74,7 @@ String command = "";
 uint8_t lightState = LIGHTS_OFF;
 uint8_t lockState = LOCK_UNKNOWN;
 uint8_t elevatorState = MOVING; // Set to moving to account for unknown state
+uint8_t roverSensorState = UNBROKEN;
 
 // System Desired Variables
 uint8_t lockDesired = LOCK_UNKNOWN;
@@ -80,6 +86,11 @@ double leftMotorPower = 0;
 double rightMotorPower = 0;
 int rightServoIndex = -1;
 int leftServoIndex = -1;
+
+
+// Additional Statistics
+float temperature = 0;
+float voltage = 0;
 
 String getStateString()
 {
@@ -162,7 +173,7 @@ void setLock(int state)
     lockSetState = state;
     if (state == LOCKED)
     {
-        ESP32_ISR_Servos.setPosition(rightServoIndex, 175);//172
+        ESP32_ISR_Servos.setPosition(rightServoIndex, 180);//172
         ESP32_ISR_Servos.setPosition(leftServoIndex, 25);//28
     }
     else if (state == UNLOCKED)
@@ -215,6 +226,26 @@ void updateLimitSwitches()
     }
 }
 
+void updateRoboClaw(){
+    uint16_t temp = 0;
+    bool error = roboclaw.ReadTemp(ROBOCLAW_ADDRESS, temp);
+    
+    delay(10);
+    temperature = (float)temp/10.0;
+    
+    
+    int read_voltage = 0;
+    read_voltage = roboclaw.ReadMainBatteryVoltage(0x80);
+    
+    delay(10);
+    voltage = (float)read_voltage/10.0;
+    
+
+    int16_t current1 = 0;
+    int16_t current2 = 0;
+    bool currentError = roboclaw.ReadCurrents(0x80, current1, current2);
+}
+
 void updateLock()
 {
     uint64_t now = millis();
@@ -246,33 +277,32 @@ void updateElevator()
         {
             if (elevatorDesired == DEPLOYED)
             {
-                //Serial.println("Trying to Deploy");
                 setMotors(DEPLOY);
             }
             else if (elevatorDesired == RETRACT)
             {
-                //Serial.println("Trying to Retract");
                 setMotors(RETRACT);
             }
             else
             {
-                //Serial.println("Stopping Unknown Objective");
                 setMotors(STOP);
             }
         }
         else
         {
-            //Serial.printf("Stopping Garage is Locked %i\n", lockState);
             setMotors(STOP);
         }
     }
     else
     {
-        Serial.println("Stopping Elevator is in Desired State");
         setMotors(STOP);
     }
 
     sendMotorPowers();
+}
+
+void updateRoverSensor(){
+    roverSensorState = digitalRead(ROVER_SENSOR_PIN);
 }
 
 void deployElevator()
@@ -376,10 +406,12 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t *payload, size_t length)
         }
         else if (command == "lights_on")
         {
+            Serial.println("Lights On!");
             lightState = LIGHTS_ON;
         }
         else if (command == "lights_off")
         {
+            Serial.println("Lights Off!");
             lightState = LIGHTS_OFF;
         }
         else
@@ -550,6 +582,11 @@ void setupServos()
     setLock(UNLOCKED);
 }
 
+void setupRoverSensor(){
+    pinMode(ROVER_SENSOR_PIN, INPUT_PULLDOWN);
+    roverSensorState = digitalRead(ROVER_SENSOR_PIN);
+}
+
 void setup()
 {
 
@@ -571,6 +608,9 @@ void setup()
     // Setup Servos
     setupServos();
 
+    // Setup Rover Sensor
+    setupRoverSensor();
+
     for (uint8_t t = 4; t > 0; t--)
     {
         USE_SERIAL.printf("[SETUP] BOOT WAIT %d...\n", t);
@@ -583,16 +623,22 @@ void setup()
     for(;;){
         forward = !forward;
         if(forward){
-            setLock(UNLOCKED);
+            //setLock(UNLOCKED);
+            Serial.println("Lights on");
+            lightState = LIGHTS_ON;
+            
         }else{
-            setLock(LOCKED);
+            //setLock(LOCKED);
+            Serial.println("Lights off");
+            lightState = LIGHTS_OFF;
         }
+        updateRoverSensor();
+        Serial.println(roverSensorState);
+        digitalWrite(LED_PIN, lightState);
         delay(5000);
-    }
-    */
-
-    Serial.printf("%i, %i\n", rightServoIndex, leftServoIndex);
-
+    }*/
+    
+   
     WiFiMulti.addAP(ssid, wifiPassword);
     connectToNetwork();
 
@@ -604,7 +650,7 @@ void setup()
     socketIO.onEvent(socketIOEvent);
     socketIO.send(sIOtype_CONNECT, "/");
     
-   //deployElevator();
+    
 }
 unsigned long messageTimestamp = 0;
 
@@ -618,8 +664,8 @@ void loop()
     if (now - messageTimestamp > 5000)
     {
 
-        // int32_t enc1= roboclaw.ReadEncM1(0x80);
-        // Serial.println("Motor Position"+String(enc1));
+        int32_t enc1= roboclaw.ReadEncM1(0x80);
+        Serial.println("Motor Position"+String(enc1));
         messageTimestamp = now;
 
         // creat JSON message for Socket.IO (event)
@@ -638,6 +684,8 @@ void loop()
         param1["state"] = getStateString();
         param1["health"] = "healthy";
         param1["health_details"] = "healthy";
+        param1["temperature"] = temperature;
+        param1["voltage"] = voltage;
 
         if (lightState == LIGHTS_ON)
         {
@@ -647,8 +695,13 @@ void loop()
         {
             param1["lights_on"] = false;
         }
+
+        if (roverSensorState == BROKEN){
+            param1["rover_docked"] = true;
+        } else{
+            param1["rover_docked"] = false;
+        }
         Serial.println(getStateString());
-        Serial.println(lockState);
 
         // param1["light_state"] = lightState;
 
@@ -664,9 +717,10 @@ void loop()
     }
 
     digitalWrite(LED_PIN, lightState);
-
-    // Update Limit Switches to check platform state
+    updateRoverSensor();
     updateLimitSwitches();
+    updateRoboClaw();
     updateLock();
     updateElevator();
+    
 }
