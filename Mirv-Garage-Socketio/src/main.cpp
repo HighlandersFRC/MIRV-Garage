@@ -27,8 +27,8 @@
 
 // LED Relay Values
 #define LED_PIN 14
-#define LIGHTS_OFF 1
-#define LIGHTS_ON 0
+#define LIGHTS_OFF 0
+#define LIGHTS_ON 1
 
 // Values to Set motors to
 #define RETRACT 1
@@ -53,10 +53,15 @@
 #define LEFT_SERVO_PIN 25
 #define RIGHT_SERVO_PIN 33
 
+// Garage Sensor Parameters
+#define ROVER_SENSOR_PIN 34
+#define UNBROKEN 0
+#define BROKEN 1
+
 // Creat Motor Controller
 RoboClaw roboclaw(&Serial2, 10000);
 
-WiFiMulti WiFiMulti;
+//WiFiMulti WiFiMulti;
 SocketIOclient socketIO;
 
 // Setup Screen
@@ -69,6 +74,7 @@ String command = "";
 uint8_t lightState = LIGHTS_OFF;
 uint8_t lockState = LOCK_UNKNOWN;
 uint8_t elevatorState = MOVING; // Set to moving to account for unknown state
+uint8_t roverSensorState = UNBROKEN;
 
 // System Desired Variables
 uint8_t lockDesired = LOCK_UNKNOWN;
@@ -80,6 +86,44 @@ double leftMotorPower = 0;
 double rightMotorPower = 0;
 int rightServoIndex = -1;
 int leftServoIndex = -1;
+
+
+// Additional Statistics
+float temperature = 0;
+float voltage = 0;
+
+
+void scanWifiNetworks(){
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect();
+    delay(100);
+
+    int n = WiFi.scanNetworks();
+    Serial.println(" scan done");
+    if (n == 0) {
+        Serial.println("no networks found");
+    } else {
+        Serial.print(n);
+        Serial.println(" networks found");
+        for (int i = 0; i < n; ++i) {
+        // Print SSID and RSSI for each network found
+            Serial.print(i + 1);
+            Serial.print(": ");
+            Serial.print(WiFi.SSID(i));
+            Serial.print(" (");
+            Serial.print(WiFi.RSSI(i));
+            Serial.print(") Enc:");
+            Serial.print(WiFi.encryptionType(i));
+            Serial.print(", BSSID: ");
+            Serial.print(WiFi.BSSIDstr(i));
+            Serial.print(", Channel: ");
+            Serial.print(WiFi.channel(i));
+            Serial.println((WiFi.encryptionType(i) == WIFI_AUTH_OPEN)?" ":"*");
+            delay(10);
+        }
+    }
+    Serial.println("");
+}
 
 String getStateString()
 {
@@ -162,7 +206,7 @@ void setLock(int state)
     lockSetState = state;
     if (state == LOCKED)
     {
-        ESP32_ISR_Servos.setPosition(rightServoIndex, 175);//172
+        ESP32_ISR_Servos.setPosition(rightServoIndex, 180);//172
         ESP32_ISR_Servos.setPosition(leftServoIndex, 25);//28
     }
     else if (state == UNLOCKED)
@@ -215,6 +259,26 @@ void updateLimitSwitches()
     }
 }
 
+void updateRoboClaw(){
+    uint16_t temp = 0;
+    bool error = roboclaw.ReadTemp(ROBOCLAW_ADDRESS, temp);
+    
+    delay(10);
+    temperature = (float)temp/10.0;
+    
+    
+    int read_voltage = 0;
+    read_voltage = roboclaw.ReadMainBatteryVoltage(0x80);
+    
+    delay(10);
+    voltage = (float)read_voltage/10.0;
+    
+
+    int16_t current1 = 0;
+    int16_t current2 = 0;
+    bool currentError = roboclaw.ReadCurrents(0x80, current1, current2);
+}
+
 void updateLock()
 {
     uint64_t now = millis();
@@ -246,33 +310,32 @@ void updateElevator()
         {
             if (elevatorDesired == DEPLOYED)
             {
-                //Serial.println("Trying to Deploy");
                 setMotors(DEPLOY);
             }
             else if (elevatorDesired == RETRACT)
             {
-                //Serial.println("Trying to Retract");
                 setMotors(RETRACT);
             }
             else
             {
-                //Serial.println("Stopping Unknown Objective");
                 setMotors(STOP);
             }
         }
         else
         {
-            //Serial.printf("Stopping Garage is Locked %i\n", lockState);
             setMotors(STOP);
         }
     }
     else
     {
-        Serial.println("Stopping Elevator is in Desired State");
         setMotors(STOP);
     }
 
     sendMotorPowers();
+}
+
+void updateRoverSensor(){
+    roverSensorState = digitalRead(ROVER_SENSOR_PIN);
 }
 
 void deployElevator()
@@ -292,13 +355,20 @@ void retractElevator()
 void drawStatus()
 {
 
-    IPAddress address = WiFi.localIP();
-    String addressString = address.toString();
+    if(WiFi.status() == WL_CONNECTED){
+        IPAddress address = WiFi.localIP();
+        String addressString = address.toString();
 
-    u8x8.drawString(0, 0, "Connected To:");
-    u8x8.drawString(0, 1, ssid);
-    u8x8.drawString(0, 3, "Current IP: ");
-    u8x8.drawString(0, 4, addressString.c_str());
+        u8x8.drawString(0, 0, "Connected To:");
+        u8x8.drawString(0, 1, ssid);
+        u8x8.drawString(0, 3, "Current IP: ");
+        u8x8.drawString(0, 4, addressString.c_str());
+    } else{
+        u8x8.drawString(0, 0, "Connecting To:");
+        u8x8.drawString(0, 1, ssid);
+        u8x8.drawString(0, 3, "Current IP: ");
+        u8x8.drawString(0, 4, "Not Connected");
+    }
     if (token != "")
     {
         u8x8.drawString(0, 6, "Token: Acquired");
@@ -376,10 +446,12 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t *payload, size_t length)
         }
         else if (command == "lights_on")
         {
+            Serial.println("Lights On!");
             lightState = LIGHTS_ON;
         }
         else if (command == "lights_off")
         {
+            Serial.println("Lights Off!");
             lightState = LIGHTS_OFF;
         }
         else
@@ -423,6 +495,110 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t *payload, size_t length)
     }
 }
 
+void WiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
+  Serial.printf("[WiFi-event] event: %d\n", event);
+  //Serial.println(info.wps_fail_reason);
+  //Serial.println(info.prov_fail_reason);
+  switch (event) {
+    case SYSTEM_EVENT_WIFI_READY: 
+      Serial.println("WiFi interface ready");
+      break;
+    case SYSTEM_EVENT_SCAN_DONE:
+      Serial.println("Completed scan for access points");
+      break;
+    case SYSTEM_EVENT_STA_START:
+      Serial.println("WiFi client started");
+      break;
+    case SYSTEM_EVENT_STA_STOP:
+      Serial.println("WiFi clients stopped");
+      break;
+    case SYSTEM_EVENT_STA_CONNECTED:
+      Serial.println("Connected to access point");
+      break;
+    case SYSTEM_EVENT_STA_DISCONNECTED:
+      Serial.println("Disconnected from WiFi access point");
+      delay(1000);
+      WiFi.disconnect(true);
+      delay(1000);
+      WiFi.reconnect();
+      break;
+    case SYSTEM_EVENT_STA_AUTHMODE_CHANGE:
+      Serial.println("Authentication mode of access point has changed");
+      break;
+    case SYSTEM_EVENT_STA_GOT_IP:
+      Serial.print("Obtained IP address: ");
+      Serial.println(WiFi.localIP());
+      break;
+    case SYSTEM_EVENT_STA_LOST_IP:
+      Serial.println("Lost IP address and IP address is reset to 0");
+      break;
+    case SYSTEM_EVENT_STA_WPS_ER_SUCCESS:
+      Serial.println("WiFi Protected Setup (WPS): succeeded in enrollee mode");
+      break;
+    case SYSTEM_EVENT_STA_WPS_ER_FAILED:
+      Serial.println("WiFi Protected Setup (WPS): failed in enrollee mode");
+      break;
+    case SYSTEM_EVENT_STA_WPS_ER_TIMEOUT:
+      Serial.println("WiFi Protected Setup (WPS): timeout in enrollee mode");
+      break;
+    case SYSTEM_EVENT_STA_WPS_ER_PIN:
+      Serial.println("WiFi Protected Setup (WPS): pin code in enrollee mode");
+      break;
+    case SYSTEM_EVENT_AP_START:
+      Serial.println("WiFi access point started");
+      break;
+    case SYSTEM_EVENT_AP_STOP:
+      Serial.println("WiFi access point  stopped");
+      break;
+    case SYSTEM_EVENT_AP_STACONNECTED:
+      Serial.println("Client connected");
+      break;
+    case SYSTEM_EVENT_AP_STADISCONNECTED:
+      Serial.println("Client disconnected");
+      break;
+    case SYSTEM_EVENT_AP_STAIPASSIGNED:
+      Serial.println("Assigned IP address to client");
+      break;
+    case SYSTEM_EVENT_AP_PROBEREQRECVED:
+      Serial.println("Received probe request");
+      break;
+    case SYSTEM_EVENT_GOT_IP6:
+      Serial.println("IPv6 is preferred");
+      break;
+    case SYSTEM_EVENT_ETH_START:
+      Serial.println("Ethernet started");
+      break;
+    case SYSTEM_EVENT_ETH_STOP:
+      Serial.println("Ethernet stopped");
+      break;
+    case SYSTEM_EVENT_ETH_CONNECTED:
+      Serial.println("Ethernet connected");
+      break;
+    case SYSTEM_EVENT_ETH_DISCONNECTED:
+      Serial.println("Ethernet disconnected");
+      break;
+    case SYSTEM_EVENT_ETH_GOT_IP:
+      Serial.println("Obtained IP address");
+      break;
+    default: break;
+}}
+
+void WiFiStationDisconnected(WiFiEvent_t event, WiFiEventInfo_t info){
+  Serial.println("Disconnected from WiFi access point");
+  Serial.print("WiFi lost connection. Reason: ");
+  //Serial.println(info.);
+  Serial.println("Trying to Reconnect");
+  //WiFi.begin(ssid, password);
+}
+/*
+void Wifi_disconnected(WiFiEvent_t event, WiFiEventInfo_t info){
+  Serial.println("Disconnected from WIFI access point");
+  Serial.print("WiFi lost connection. Reason: ");
+  Serial.println(info.eth_connected);
+  Serial.println("Reconnecting...");
+  WiFi.begin(ssid, wifiPassword);
+}
+*/
 void connectToNetwork()
 {
     u8x8.clearDisplay();
@@ -430,11 +606,24 @@ void connectToNetwork()
     u8x8.drawString(0, 4, ssid);
     int retryCount = 0;
     Serial.println("Connecting to Network");
-    while (WiFiMulti.run() != WL_CONNECTED)
+
+
+    WiFi.disconnect(true);
+    WiFi.onEvent(WiFiEvent);
+    WiFi.begin(ssid, wifiPassword);
+    
+    
+
+    //while (WiFiMulti.run() != WL_CONNECTED)
+    while (WiFi.status() != WL_CONNECTED)
     {
-        Serial.println(".");
+
+        WiFi.disconnect(true);
+        WiFi.begin( ssid, wifiPassword );
+        delay(10000);
+        Serial.println(WiFi.status());
         
-        delay(500);
+        
 
         if (retryCount > 16)
         {
@@ -444,13 +633,17 @@ void connectToNetwork()
         u8x8.drawString(retryCount, 6, ".");
 
         retryCount += 1;
-        if (retryCount > 3)
+        if (retryCount > 10)
         {
-            ESP.restart();
+        //    ESP.restart();
         }
     }
     String ip = WiFi.localIP().toString();
     USE_SERIAL.printf("[SETUP] WiFi Connected %s\n", ip.c_str());
+
+    String dns = WiFi.dnsIP().toString();
+    USE_SERIAL.printf("[SETUP] DNS Connected %s\n", dns.c_str());
+
     u8x8.clearDisplay();
     drawStatus();
 }
@@ -459,9 +652,11 @@ void getToken()
 {
     while (token == "")
     {
+
         HTTPClient http;
-        String endpoint = "http://" + apiHost + ":" + apiPort + "/token";
-        String auth = "grant_type=&username=" + username + "&password=" + apiPassword + "&scope=&client_id=&client_secret=";
+        String endpoint = "https://" + apiHost + ":" + apiPort + "/token";
+        
+        String auth = "grant-type=&username=" + username + "&password=" + apiPassword + "&scope=&client-id=&client-secret=";
 
         http.begin(endpoint.c_str());
         http.setTimeout(10000);
@@ -550,6 +745,11 @@ void setupServos()
     setLock(UNLOCKED);
 }
 
+void setupRoverSensor(){
+    pinMode(ROVER_SENSOR_PIN, INPUT_PULLDOWN);
+    roverSensorState = digitalRead(ROVER_SENSOR_PIN);
+}
+
 void setup()
 {
 
@@ -571,6 +771,9 @@ void setup()
     // Setup Servos
     setupServos();
 
+    // Setup Rover Sensor
+    setupRoverSensor();
+
     for (uint8_t t = 4; t > 0; t--)
     {
         USE_SERIAL.printf("[SETUP] BOOT WAIT %d...\n", t);
@@ -578,48 +781,61 @@ void setup()
         delay(1000);
     }
 
+    scanWifiNetworks();
+
     /*
     bool forward = false;
     for(;;){
         forward = !forward;
         if(forward){
-            setLock(UNLOCKED);
+            //setLock(UNLOCKED);
+            Serial.println("Lights on");
+            lightState = LIGHTS_ON;
+            
         }else{
-            setLock(LOCKED);
+            //setLock(LOCKED);
+            Serial.println("Lights off");
+            lightState = LIGHTS_OFF;
         }
+        updateRoverSensor();
+        Serial.println(roverSensorState);
+        digitalWrite(LED_PIN, lightState);
         delay(5000);
-    }
-    */
-
-    Serial.printf("%i, %i\n", rightServoIndex, leftServoIndex);
-
-    WiFiMulti.addAP(ssid, wifiPassword);
+    }*/
+    
+   
     connectToNetwork();
 
     getToken();
-    String headers = "ID:" + garageID + "\nDEVICE_TYPE:garage" + "\nTOKEN:" + token;
+    String headers = "ID:" + garageID + "\nDEVICE-TYPE:garage" + "\nTOKEN:" + token;
 
     socketIO.setExtraHeaders(headers.c_str());
-    socketIO.begin(apiHost, apiPort, "/ws/socket.io/?EIO=4");
+    socketIO.beginSSL(apiHost, apiPort, "/ws/socket.io/?EIO=4");
     socketIO.onEvent(socketIOEvent);
     socketIO.send(sIOtype_CONNECT, "/");
     
-   //deployElevator();
+    
 }
 unsigned long messageTimestamp = 0;
 
 void loop()
 {
 
-    socketIO.loop();
+    if(WiFi.status() != WL_CONNECTED){
+        Serial.println("Lost Wifi Connecting. Reconnecting");
+        drawStatus();
+        //WiFi.reconnect();
+    }
 
+    socketIO.loop();
     uint64_t now = millis();
 
+    //Serial.println("Sent Cloud Update");
     if (now - messageTimestamp > 5000)
     {
 
-        // int32_t enc1= roboclaw.ReadEncM1(0x80);
-        // Serial.println("Motor Position"+String(enc1));
+        int32_t enc1= roboclaw.ReadEncM1(0x80);
+        Serial.println("Motor Position"+String(enc1));
         messageTimestamp = now;
 
         // creat JSON message for Socket.IO (event)
@@ -638,6 +854,8 @@ void loop()
         param1["state"] = getStateString();
         param1["health"] = "healthy";
         param1["health_details"] = "healthy";
+        param1["temperature"] = temperature;
+        param1["voltage"] = voltage;
 
         if (lightState == LIGHTS_ON)
         {
@@ -647,8 +865,13 @@ void loop()
         {
             param1["lights_on"] = false;
         }
+
+        if (roverSensorState == BROKEN){
+            param1["rover_docked"] = true;
+        } else{
+            param1["rover_docked"] = false;
+        }
         Serial.println(getStateString());
-        Serial.println(lockState);
 
         // param1["light_state"] = lightState;
 
@@ -661,12 +884,15 @@ void loop()
 
         // Print JSON for debugging
         USE_SERIAL.println(output);
+
+        
     }
 
     digitalWrite(LED_PIN, lightState);
-
-    // Update Limit Switches to check platform state
+    updateRoverSensor();
     updateLimitSwitches();
+    updateRoboClaw();
     updateLock();
-    updateElevator();
+    updateElevator();  
+    delay(100);
 }
