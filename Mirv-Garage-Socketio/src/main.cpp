@@ -206,13 +206,13 @@ void setLock(int state)
     lockSetState = state;
     if (state == LOCKED)
     {
-        ESP32_ISR_Servos.setPosition(rightServoIndex, 180);//172
-        ESP32_ISR_Servos.setPosition(leftServoIndex, 25);//28
+        ESP32_ISR_Servos.setPosition(rightServoIndex, 140);//172
+        ESP32_ISR_Servos.setPosition(leftServoIndex, 32);//28
     }
     else if (state == UNLOCKED)
     {
-        ESP32_ISR_Servos.setPosition(rightServoIndex, 140);//140
-        ESP32_ISR_Servos.setPosition(leftServoIndex,72);//75
+        ESP32_ISR_Servos.setPosition(rightServoIndex, 100);//140
+        ESP32_ISR_Servos.setPosition(leftServoIndex,65);//75
     }
     else
     {
@@ -782,26 +782,26 @@ void setup()
     }
 
     scanWifiNetworks();
-
-    /*
-    bool forward = false;
-    for(;;){
-        forward = !forward;
-        if(forward){
-            //setLock(UNLOCKED);
-            Serial.println("Lights on");
-            lightState = LIGHTS_ON;
+    
+    // // Code for Servo Position Tuning
+    // bool forward = false;
+    // for(;;){
+    //     forward = !forward;
+    //     if(forward){
+    //         setLock(UNLOCKED);
+    //         Serial.println("Lights on");
+    //         //lightState = LIGHTS_ON;
             
-        }else{
-            //setLock(LOCKED);
-            Serial.println("Lights off");
-            lightState = LIGHTS_OFF;
-        }
-        updateRoverSensor();
-        Serial.println(roverSensorState);
-        digitalWrite(LED_PIN, lightState);
-        delay(5000);
-    }*/
+    //     }else{
+    //         setLock(LOCKED);
+    //         Serial.println("Lights off");
+    //         //lightState = LIGHTS_OFF;
+    //     }
+    //     updateRoverSensor();
+    //     Serial.println(roverSensorState);
+    //     digitalWrite(LED_PIN, lightState);
+    //     delay(5000);
+    // }
     
    
     connectToNetwork();
